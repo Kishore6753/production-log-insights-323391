@@ -129,6 +129,54 @@ GRANT CREATE ON SCHEMA public TO ${DB_USER};
 \dn+ public
 EOF
 
+# Initialize application schema (minimal, dashboard-focused)
+# - uploads: stores metadata + raw content for the uploaded log file
+# - analysis_reports: stores the structured JSON report produced by the backend
+echo "Initializing application schema (uploads, analysis_reports)..."
+sudo -u postgres ${PG_BIN}/psql -p ${DB_PORT} -d ${DB_NAME} << 'EOF'
+-- Enable UUID generation (use pgcrypto's gen_random_uuid, available on modern Postgres)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Upload metadata + raw content (kept minimal for later retrieval)
+CREATE TABLE IF NOT EXISTS uploads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    filename TEXT NOT NULL,
+    content_type TEXT NULL,
+    -- Raw file bytes. This is the simplest durable storage choice for now.
+    -- If later needed, this can be replaced with object storage and a URL.
+    content BYTEA NOT NULL,
+
+    -- Basic stats for quick dashboard rendering (optional fields)
+    size_bytes BIGINT NOT NULL,
+    sha256 TEXT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Structured analysis report JSON (as returned by /api/logs/analyze)
+CREATE TABLE IF NOT EXISTS analysis_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    upload_id UUID NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
+
+    -- Top-level summary fields commonly needed by dashboards
+    total_errors INTEGER NULL,
+    total_warnings INTEGER NULL,
+    total_info INTEGER NULL,
+
+    -- Full structured report payload (skill-compliant)
+    report_json JSONB NOT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Helpful indexes for dashboard queries
+CREATE INDEX IF NOT EXISTS idx_uploads_created_at ON uploads (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analysis_reports_upload_id ON analysis_reports (upload_id);
+CREATE INDEX IF NOT EXISTS idx_analysis_reports_created_at ON analysis_reports (created_at DESC);
+EOF
+
+echo "✓ Application schema initialized."
+
 # Save connection command to a file
 echo "psql postgresql://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}" > db_connection.txt
 echo "Connection string saved to db_connection.txt"
